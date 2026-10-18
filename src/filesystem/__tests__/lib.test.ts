@@ -603,6 +603,119 @@ describe("Lib Functions", () => {
         expect(handle.writeFile).not.toHaveBeenCalled();
       });
 
+      // #5154: on Windows a path-based stat can report the device as 0 while
+      // the same file through the opened handle reports the real volume
+      // serial (Node 23; measured 23.6.1 and 23.11.1). The inode still
+      // matches. Requiring the devices to be equal refused every overwrite of
+      // an existing file there.
+      it("overwrites when the path-based stat reports no device (Windows)", async () => {
+        mockFs.writeFile.mockRejectedValueOnce(
+          Object.assign(new Error("EEXIST"), { code: "EEXIST" }),
+        );
+        mockFs.lstat.mockResolvedValueOnce({
+          ...REGULAR_FILE,
+          dev: 0,
+        } as Stats);
+        const handle = createMockWriteHandle({
+          ...REGULAR_FILE,
+          dev: 716763443,
+        } as Stats);
+        mockFs.open.mockResolvedValueOnce(asWriteHandle(handle));
+
+        const platform = process.platform;
+        Object.defineProperty(process, "platform", { value: "win32" });
+        try {
+          await writeFileContent("/test/file.txt", "new content");
+        } finally {
+          Object.defineProperty(process, "platform", { value: platform });
+        }
+
+        expect(handle.truncate).toHaveBeenCalledWith(0);
+        expect(handle.writeFile).toHaveBeenCalledWith("new content", "utf-8");
+      });
+
+      it("still refuses a swap on Windows when the path-based stat has no device", async () => {
+        mockFs.writeFile.mockRejectedValueOnce(
+          Object.assign(new Error("EEXIST"), { code: "EEXIST" }),
+        );
+        mockFs.lstat.mockResolvedValueOnce({
+          ...REGULAR_FILE,
+          dev: 0,
+        } as Stats);
+        const handle = createMockWriteHandle({
+          ...REGULAR_FILE,
+          dev: 716763443,
+          ino: 43,
+        } as Stats);
+        mockFs.open.mockResolvedValueOnce(asWriteHandle(handle));
+
+        const platform = process.platform;
+        Object.defineProperty(process, "platform", { value: "win32" });
+        try {
+          await expect(
+            writeFileContent("/test/file.txt", "new content"),
+          ).rejects.toThrow("was replaced while it was being opened");
+        } finally {
+          Object.defineProperty(process, "platform", { value: platform });
+        }
+
+        expect(handle.writeFile).not.toHaveBeenCalled();
+      });
+
+      it("still refuses a nonzero device mismatch on Windows", async () => {
+        mockFs.writeFile.mockRejectedValueOnce(
+          Object.assign(new Error("EEXIST"), { code: "EEXIST" }),
+        );
+        mockFs.lstat.mockResolvedValueOnce({
+          ...REGULAR_FILE,
+          dev: 2,
+        } as Stats);
+        const handle = createMockWriteHandle({
+          ...REGULAR_FILE,
+          dev: 3,
+        } as Stats);
+        mockFs.open.mockResolvedValueOnce(asWriteHandle(handle));
+
+        const platform = process.platform;
+        Object.defineProperty(process, "platform", { value: "win32" });
+        try {
+          await expect(
+            writeFileContent("/test/file.txt", "new content"),
+          ).rejects.toThrow("was replaced while it was being opened");
+        } finally {
+          Object.defineProperty(process, "platform", { value: platform });
+        }
+
+        expect(handle.writeFile).not.toHaveBeenCalled();
+      });
+
+      it("still refuses a deviceless path stat off Windows", async () => {
+        mockFs.writeFile.mockRejectedValueOnce(
+          Object.assign(new Error("EEXIST"), { code: "EEXIST" }),
+        );
+        mockFs.lstat.mockResolvedValueOnce({
+          ...REGULAR_FILE,
+          dev: 0,
+        } as Stats);
+        const handle = createMockWriteHandle({
+          ...REGULAR_FILE,
+          dev: 716763443,
+        } as Stats);
+        mockFs.open.mockResolvedValueOnce(asWriteHandle(handle));
+
+        const platform = process.platform;
+        Object.defineProperty(process, "platform", { value: "linux" });
+        try {
+          await expect(
+            writeFileContent("/test/file.txt", "new content"),
+          ).rejects.toThrow("was replaced while it was being opened");
+        } finally {
+          Object.defineProperty(process, "platform", { value: platform });
+        }
+
+        expect(handle.writeFile).not.toHaveBeenCalled();
+      });
+
       it("closes the handle when the write fails", async () => {
         mockFs.writeFile.mockRejectedValueOnce(
           Object.assign(new Error("EEXIST"), { code: "EEXIST" }),

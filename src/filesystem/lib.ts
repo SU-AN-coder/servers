@@ -323,10 +323,15 @@ export async function writeFileContent(
  *   included;
  * - O_NOFOLLOW makes the open itself fail with ELOOP on a symlink. It exists
  *   only on POSIX: fs.constants.O_NOFOLLOW is undefined on Windows;
- * - the opened handle must be the very file lstat saw (same device and inode),
+ * - the opened handle must be the very file lstat saw. Identity is the inode,
  *   which catches a swap between the lstat and the open on every platform,
- *   Windows included. Once the handle is verified, every write goes through
- *   it, so a later swap of the path cannot redirect it.
+ *   Windows included. The device value is compared too, except where the
+ *   path-based stat cannot supply it: on Windows a path-based stat can report
+ *   device 0 while the same file read through the handle reports the real
+ *   volume serial (Node 23; #5154), so a zero device there is treated as
+ *   unknown and the inode alone carries the check. Any nonzero device
+ *   mismatch still refuses. Once the handle is verified, every write goes
+ *   through it, so a later swap of the path cannot redirect it.
  *
  * The trade-off is crash-atomicity: a crash mid-write leaves a partly written
  * file, where the rename left either the old content or the new.
@@ -347,10 +352,20 @@ async function overwriteInPlace(
   );
   try {
     const opened = await handle.stat();
+    // A path-based stat on Windows can report device 0 where the same file,
+    // read through the opened handle, reports the volume serial: Node 23
+    // does (measured 23.6.1 and 23.11.1, both NTFS volumes), while 22.20.0,
+    // 24.9.0 and 25.1.0 report the serial (#5154). The inode still identifies
+    // the file, so the check keeps its meaning without comparing the two
+    // device values. Windows-only, and only when the path-based stat says the
+    // device is unknown: any nonzero mismatch still refuses, and isFile() and
+    // the inode check stay unconditional.
+    const deviceUnavailable =
+      process.platform === "win32" && expected.dev === 0;
     if (
       !opened.isFile() ||
-      opened.dev !== expected.dev ||
-      opened.ino !== expected.ino
+      opened.ino !== expected.ino ||
+      (!deviceUnavailable && opened.dev !== expected.dev)
     ) {
       throw new Error(
         `Refusing to write: ${filePath} was replaced while it was being opened`,
