@@ -152,18 +152,26 @@ class GitTools(str, Enum):
     BRANCH = "git_branch"
 
 
+def _git_unquoted_paths(repo: git.Repo) -> git.Git:
+    # git's default core.quotepath=true prints non-ASCII paths as quoted octal
+    # escapes (e.g. "\346\227\245.txt"), which a client cannot map back to a real
+    # file, so a follow-up git_add with the printed name fails. -c sets the option
+    # for this command only; it is not written to the repository's config.
+    return repo.git(c="core.quotepath=false")
+
+
 def git_status(repo: git.Repo) -> str:
-    return repo.git.status()
+    return _git_unquoted_paths(repo).status()
 
 
 def git_diff_unstaged(
     repo: git.Repo, context_lines: int = DEFAULT_CONTEXT_LINES
 ) -> str:
-    return repo.git.diff(f"--unified={context_lines}")
+    return _git_unquoted_paths(repo).diff(f"--unified={context_lines}")
 
 
 def git_diff_staged(repo: git.Repo, context_lines: int = DEFAULT_CONTEXT_LINES) -> str:
-    return repo.git.diff(f"--unified={context_lines}", "--cached")
+    return _git_unquoted_paths(repo).diff(f"--unified={context_lines}", "--cached")
 
 
 def git_diff(
@@ -174,7 +182,7 @@ def git_diff(
     if target.startswith("-"):
         raise FlagInjectionError(f"Invalid target: '{target}' - cannot start with '-'")
     repo.rev_parse(target)  # Validates target is a real git ref, throws BadName if not
-    return repo.git.diff(f"--unified={context_lines}", target)
+    return _git_unquoted_paths(repo).diff(f"--unified={context_lines}", target)
 
 
 def _has_staged_changes(repo: git.Repo) -> bool:
